@@ -8,6 +8,7 @@
 
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <ctime>
 
 static int csqToPercent(int csq) {
     if (csq < 0 || csq > 31) return 0;
@@ -51,6 +52,8 @@ void ModemManager::saveBalanceLocked() {
     doc["display"] = _status.balanceDisplay;
     doc["raw"] = _status.balanceRawText;
     doc["updated_at"] = _status.balanceUpdatedAt;
+    doc["low_balance_alerted"] = _lowBalanceAlerted;
+    doc["last_auto_check_epoch"] = static_cast<uint64_t>(_lastAutoBalanceCheckEpoch);
     serializeJson(doc, f);
     f.close();
 }
@@ -66,6 +69,8 @@ void ModemManager::loadBalance() {
                 _status.balanceDisplay = doc["display"] | "";
                 _status.balanceRawText = doc["raw"] | "";
                 _status.balanceUpdatedAt = doc["updated_at"] | "";
+                _lowBalanceAlerted = doc["low_balance_alerted"] | false;
+                _lastAutoBalanceCheckEpoch = doc["last_auto_check_epoch"] | 0ULL;
             }
             f.close();
             if (_status.balanceAmount >= 0.0) return;
@@ -101,9 +106,18 @@ void ModemManager::updateBalanceLocked(double amount, const String& currency, co
     _status.balanceRawText = rawText;
     _status.balanceUpdatedAt = timestamp.length() > 0 ? timestamp : SmsStore::fallbackTimestamp();
     _status.balancePending = false;
-    saveBalanceLocked();
 
-    if (emitEvents) {
+    if (emitEvents && _cfg) {
+        const auto& c = _cfg->get();
+        if (c.lowBalanceSmsEnabled && c.defaultContact.length() > 0 && amount >= 0.0) {
+            if (amount <= c.lowBalanceThreshold && !_lowBalanceAlerted) {
+                _lowBalanceAlerted = true;
+                queueAlertSmsLocked("[" + c.hostname + "] Low prepaid balance: " + _status.balanceDisplay +
+                                    " (threshold " + String(c.lowBalanceThreshold, 2) + ")");
+            } else if (amount > c.lowBalanceThreshold + 0.25) {
+                _lowBalanceAlerted = false;
+            }
+        }
         _balanceNotifyPending = true;
         if (_webhook) {
             JsonDocument d;
@@ -115,6 +129,100 @@ void ModemManager::updateBalanceLocked(double amount, const String& currency, co
             _webhook->enqueueEvent("balance.updated", d);
         }
     }
+    saveBalanceLocked();
+}
+
+static String digitsSuffix8(const String& s) {
+    String d;
+    for (size_t i = 0; i < s.length(); ++i) {
+        char c = s[i];
+        if (c >= '0' && c <= '9') d += c;
+    }
+    if (d.length() > 8) return d.substring(d.length() - 8);
+    return d;
+}
+
+void ModemManager::queueAlertSmsLocked(const String& msg) {
+    if (!_cfg || _cfg->get().defaultContact.length() == 0) return;
+    if (_pendingAlertSms.size() >= 4) return;
+    _pendingAlertSms.push_back(msg);
+}
+
+void ModemManager::evaluateAlertsLocked() {
+    if (!_cfg) return;
+    const auto& c = _cfg->get();
+
+    // Debounce external power vs battery state transitions
+    if (_status.batteryState == "charging_or_usb" || _status.batteryState == "battery") {
+        if (_stablePowerState.length() == 0) {
+            _stablePowerState = _status.batteryState;
+            _pendingPowerState = "";
+            _powerStateDebounceCount = 0;
+        } else if (_status.batteryState != _stablePowerState) {
+            if (_pendingPowerState == _status.batteryState) {
+                ++_powerStateDebounceCount;
+            } else {
+                _pendingPowerState = _status.batteryState;
+                _powerStateDebounceCount = 1;
+            }
+            if (_powerStateDebounceCount >= 3) {
+                String oldState = _stablePowerState;
+                _stablePowerState = _status.batteryState;
+                _pendingPowerState = "";
+                _powerStateDebounceCount = 0;
+                if (c.powerLossSmsEnabled && c.defaultContact.length() > 0) {
+                    if (oldState == "charging_or_usb" && _stablePowerState == "battery") {
+                        queueAlertSmsLocked("[" + c.hostname + "] External power lost - running on battery (" +
+                                            String(_status.batteryPercent) + "%, " +
+                                            String(_status.batteryMv / 1000.0f, 2) + "V)");
+                    } else if (oldState == "battery" && _stablePowerState == "charging_or_usb") {
+                        queueAlertSmsLocked("[" + c.hostname + "] External power restored (" +
+                                            String(_status.batteryPercent) + "%, " +
+                                            String(_status.batteryMv / 1000.0f, 2) + "V)");
+                    }
+                }
+            }
+        } else {
+            _pendingPowerState = "";
+            _powerStateDebounceCount = 0;
+        }
+    }
+
+    // Low battery SMS alert (only when actually running on battery, with hysteresis)
+    if (_status.batteryState == "battery") {
+        if (_status.batteryPercent <= c.lowBatteryThresholdPct) {
+            if (_lowBatDebounceCount < 10) ++_lowBatDebounceCount;
+            if (c.lowBatterySmsEnabled && !_lowBatteryAlerted && _lowBatDebounceCount >= 3 &&
+                c.defaultContact.length() > 0) {
+                _lowBatteryAlerted = true;
+                queueAlertSmsLocked("[" + c.hostname + "] Low battery: " +
+                                    String(_status.batteryPercent) + "% (" +
+                                    String(_status.batteryMv / 1000.0f, 2) + "V)");
+            }
+        } else {
+            _lowBatDebounceCount = 0;
+            if (_status.batteryPercent >= c.lowBatteryThresholdPct + 10) {
+                _lowBatteryAlerted = false;
+            }
+        }
+    } else if (_status.batteryState == "charging_or_usb") {
+        _lowBatDebounceCount = 0;
+        _lowBatteryAlerted = false;
+    }
+}
+
+void ModemManager::maybeForwardSmsLocked(const SmsRecord& rec) {
+    if (!_cfg) return;
+    const auto& c = _cfg->get();
+    if (!c.smsForwardEnabled || c.defaultContact.length() == 0) return;
+
+    // Avoid forwarding balance replies or messages from defaultContact itself (prevents SMS loops)
+    if (isBalanceSenderMatch(rec.peer.c_str(), c.balanceTarget.c_str(), rec.text.c_str())) return;
+    String peerSfx = digitsSuffix8(rec.peer);
+    String defSfx = digitsSuffix8(c.defaultContact);
+    if ((peerSfx.length() >= 7 && peerSfx == defSfx) || rec.peer == c.defaultContact) return;
+
+    queueAlertSmsLocked("[FWD " + rec.peer + "] " + rec.text);
 }
 
 void ModemManager::maybeUpdateBalanceFromSmsLocked(const SmsRecord& rec, bool emitEvents) {
@@ -340,6 +448,7 @@ void ModemManager::sampleBattery() {
 
 void ModemManager::refreshStatusLocked() {
     sampleBattery();
+    evaluateAlertsLocked();
     String resp;
 
     if (!sendAtWaitOkLocked("AT", resp, 1000)) {
@@ -422,6 +531,10 @@ void ModemManager::refreshStatusLocked() {
 }
 
 void ModemManager::loopTaskTick() {
+    String alertToSend;
+    String alertTarget;
+    bool shouldRunAutoBalance = false;
+
     if (lock(20)) {
         if (!_status.ready && (_lastRetryInitMs == 0 || millis() - _lastRetryInitMs > 20000)) {
             _lastRetryInitMs = millis();
@@ -458,7 +571,45 @@ void ModemManager::loopTaskTick() {
         if (_status.balancePending && (millis() - _balanceCheckSentMs > 60000)) {
             _status.balancePending = false;
         }
+
+        // Dequeue at most 1 pending SMS alert/forward when registered on cellular network
+        bool netOk = _status.ready && _status.simReady && (_status.regStatus == 1 || _status.regStatus == 5);
+        if (netOk && !_pendingAlertSms.empty() && _cfg && _cfg->get().defaultContact.length() > 0) {
+            alertToSend = _pendingAlertSms.front();
+            _pendingAlertSms.erase(_pendingAlertSms.begin());
+            alertTarget = _cfg->get().defaultContact;
+        }
+
+        // Periodic balance check timer (every balanceCheckIntervalHours)
+        if (netOk && !_status.balancePending && _cfg && _cfg->get().balanceCheckIntervalHours > 0 && millis() > 60000) {
+            uint32_t intervalSec = static_cast<uint32_t>(_cfg->get().balanceCheckIntervalHours) * 3600UL;
+            time_t now = time(nullptr);
+            if (now > 1700000000) {
+                uint64_t uNow = static_cast<uint64_t>(now);
+                if (_lastAutoBalanceCheckEpoch == 0 || (uNow > _lastAutoBalanceCheckEpoch && (uNow - _lastAutoBalanceCheckEpoch) >= intervalSec)) {
+                    _lastAutoBalanceCheckEpoch = uNow;
+                    _lastAutoBalanceCheckMs = millis();
+                    saveBalanceLocked();
+                    shouldRunAutoBalance = true;
+                }
+            } else if (_lastAutoBalanceCheckMs == 0 || (millis() - _lastAutoBalanceCheckMs) >= (intervalSec * 1000UL)) {
+                _lastAutoBalanceCheckMs = millis();
+                shouldRunAutoBalance = true;
+            }
+        }
         unlock();
+    }
+
+    if (alertToSend.length() > 0 && alertTarget.length() > 0) {
+        String err;
+        if (!sendSms(alertTarget, alertToSend, err)) {
+            Serial.printf("[Alert] Failed to send alert SMS to %s: %s\n", alertTarget.c_str(), err.c_str());
+        }
+    }
+
+    if (shouldRunAutoBalance) {
+        String msg, err;
+        requestBalanceCheck(msg, err);
     }
 
     if (_balanceNotifyPending && _mqtt) {
@@ -702,6 +853,7 @@ void ModemManager::scanSimSmsLocked() {
                         _mqtt->publishIncomingSms(completed);
                     }
                     maybeUpdateBalanceFromSmsLocked(completed, true);
+                    maybeForwardSmsLocked(completed);
                 }
                 indicesToDelete.push_back(pendingIndex);
             }
@@ -921,6 +1073,9 @@ bool ModemManager::requestBalanceCheck(String& messageOut, String& errorOut) {
         }
         ParsedBalance pb = parseBalanceText(resp.c_str());
         if (lock(5000)) {
+            _lastAutoBalanceCheckMs = millis();
+            time_t now = time(nullptr);
+            if (now > 1700000000) _lastAutoBalanceCheckEpoch = static_cast<uint64_t>(now);
             if (pb.valid) {
                 updateBalanceLocked(pb.amount, pb.currency.c_str(), pb.formatted.c_str(),
                                     resp, SmsStore::fallbackTimestamp(), true);
@@ -941,6 +1096,12 @@ bool ModemManager::requestBalanceCheck(String& messageOut, String& errorOut) {
     if (lock(2000)) {
         _status.balancePending = true;
         _balanceCheckSentMs = millis();
+        _lastAutoBalanceCheckMs = millis();
+        time_t now = time(nullptr);
+        if (now > 1700000000) {
+            _lastAutoBalanceCheckEpoch = static_cast<uint64_t>(now);
+            saveBalanceLocked();
+        }
         unlock();
     }
     if (!sendSms(cfg.balanceTarget, msgBody, errorOut)) {

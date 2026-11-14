@@ -291,6 +291,19 @@ pre{background:var(--bg);border:1px solid var(--border);border-radius:8px;paddin
           <div><label>Target / Code</label><input id="c_bal_target" placeholder="1144"></div>
         </div>
         <label>SMS Keyword (for SMS balance check)</label><input id="c_bal_msg" placeholder="SALDO">
+        <h2 style="margin-top:16px">Default Contact &amp; SMS Alerts</h2>
+        <label>Default Contact / Alert Number (E.164 e.g. +31612345678)</label>
+        <input id="c_def_contact" placeholder="+31612345678">
+        <label>Auto Balance Check Interval (hours, 0 = disabled)</label>
+        <input id="c_bal_int" type="number" min="0" max="8760">
+        <label class="chk"><input type="checkbox" id="c_low_bal_en"> Send SMS when credit drops below:</label>
+        <div class="row">
+          <div><label>Min Credit (€)</label><input id="c_low_bal_thr" type="number" step="0.5" min="0"></div>
+          <div><label>Min Battery (%)</label><input id="c_low_bat_pct" type="number" min="5" max="50"></div>
+        </div>
+        <label class="chk"><input type="checkbox" id="c_low_bat_en"> Send SMS when battery drops below min %</label>
+        <label class="chk"><input type="checkbox" id="c_pwr_loss_en"> Send SMS on USB/external power loss &amp; restore</label>
+        <label class="chk"><input type="checkbox" id="c_sms_fwd_en"> Forward incoming SMS to Default Contact</label>
         <h2 style="margin-top:16px">4G Proxy Settings</h2>
         <label class="chk"><input type="checkbox" id="c_proxy_en"> Enable HTTP/SOCKS5 Proxy</label>
         <div class="row">
@@ -516,6 +529,11 @@ async function loadConfig(){
     $('c_apn').value=c.apn||''; $('c_apn_user').value=c.apn_user||''; $('c_apn_pass').value=c.apn_pass||'';
     $('c_sim_pin').value=c.sim_pin||''; $('c_auto_del').checked=!!c.auto_delete_sim_sms;
     $('c_bal_method').value=c.balance_method||'sms'; $('c_bal_target').value=c.balance_target||'1144'; $('c_bal_msg').value=c.balance_message||'SALDO';
+    $('c_def_contact').value=c.default_contact||''; $('c_bal_int').value=c.balance_check_interval_hours||0;
+    $('c_low_bal_en').checked=!!c.low_balance_sms_enabled; $('c_low_bal_thr').value=(c.low_balance_threshold!==undefined)?c.low_balance_threshold:2.00;
+    $('c_low_bat_en').checked=!!c.low_battery_sms_enabled; $('c_low_bat_pct').value=c.low_battery_threshold_pct||20;
+    $('c_pwr_loss_en').checked=!!c.power_loss_sms_enabled; $('c_sms_fwd_en').checked=!!c.sms_forward_enabled;
+    if(c.default_contact){ if(!$('smsTo').value) $('smsTo').value=c.default_contact; if(!$('callTo').value) $('callTo').value=c.default_contact; }
     $('c_proxy_en').checked=!!c.proxy_enabled; $('c_http_port').value=c.http_proxy_port||8080; $('c_socks_port').value=c.socks_proxy_port||1080;
     $('c_proxy_user').value=c.proxy_user||''; $('c_proxy_pass').value=c.proxy_pass||'';
     $('c_wh_en').checked=!!c.webhook_enabled; $('c_wh_url').value=c.webhook_url||''; $('c_wh_sec').value=c.webhook_secret||'';
@@ -541,6 +559,10 @@ async function saveConfig(){
     apn:$('c_apn').value, apn_user:$('c_apn_user').value, apn_pass:$('c_apn_pass').value,
     sim_pin:$('c_sim_pin').value, auto_delete_sim_sms:$('c_auto_del').checked,
     balance_method:$('c_bal_method').value, balance_target:$('c_bal_target').value, balance_message:$('c_bal_msg').value,
+    default_contact:$('c_def_contact').value.trim(), balance_check_interval_hours:+$('c_bal_int').value||0,
+    low_balance_sms_enabled:$('c_low_bal_en').checked, low_balance_threshold:parseFloat($('c_low_bal_thr').value||'2'),
+    low_battery_sms_enabled:$('c_low_bat_en').checked, low_battery_threshold_pct:+$('c_low_bat_pct').value||20,
+    power_loss_sms_enabled:$('c_pwr_loss_en').checked, sms_forward_enabled:$('c_sms_fwd_en').checked,
     proxy_enabled:$('c_proxy_en').checked, http_proxy_port:+$('c_http_port').value, socks_proxy_port:+$('c_socks_port').value,
     proxy_user:$('c_proxy_user').value, proxy_pass:$('c_proxy_pass').value,
     webhook_enabled:$('c_wh_en').checked, webhook_url:$('c_wh_url').value, webhook_secret:$('c_wh_sec').value,

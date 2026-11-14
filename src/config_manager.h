@@ -26,6 +26,16 @@ struct GatewayConfig {
     String balanceTarget = "1144";   // Odido NL prepaid short code or USSD (e.g. *101#)
     String balanceMessage = "SALDO"; // SMS body when balanceMethod == "sms"
 
+    // Default Contact & SMS Alerts
+    String defaultContact;                  // Default recipient for SMS alerts / forwarding
+    uint16_t balanceCheckIntervalHours = 0; // 0 = disabled
+    bool lowBalanceSmsEnabled = false;
+    double lowBalanceThreshold = 2.00;
+    bool lowBatterySmsEnabled = false;
+    uint8_t lowBatteryThresholdPct = 20;
+    bool powerLossSmsEnabled = false;       // Notify when external power drops to battery
+    bool smsForwardEnabled = false;         // Forward incoming SMS to defaultContact
+
     // Webhook (Node-Red / Home Assistant)
     bool webhookEnabled = false;
     String webhookUrl;

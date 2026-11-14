@@ -107,6 +107,9 @@ private:
     void maybeUpdateBalanceFromSmsLocked(const SmsRecord& rec, bool emitEvents);
     void updateBalanceLocked(double amount, const String& currency, const String& display,
                              const String& rawText, const String& timestamp, bool emitEvents);
+    void queueAlertSmsLocked(const String& msg);
+    void evaluateAlertsLocked();
+    void maybeForwardSmsLocked(const SmsRecord& rec);
 
     bool sendAtWaitOkLocked(const String& cmd, String& out, uint32_t timeoutMs = 3000);
     bool readLineLocked(String& lineOut, uint32_t timeoutMs);
@@ -138,4 +141,13 @@ private:
     bool _simPinAttempted = false;
     volatile bool _balanceNotifyPending = false;
     uint32_t _balanceCheckSentMs = 0;
+    uint32_t _lastAutoBalanceCheckMs = 0;
+    uint64_t _lastAutoBalanceCheckEpoch = 0;
+    bool _lowBalanceAlerted = false;
+    bool _lowBatteryAlerted = false;
+    uint8_t _lowBatDebounceCount = 0;
+    String _stablePowerState;
+    String _pendingPowerState;
+    uint8_t _powerStateDebounceCount = 0;
+    std::vector<String> _pendingAlertSms;
 };

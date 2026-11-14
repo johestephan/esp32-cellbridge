@@ -33,6 +33,15 @@ void ConfigManager::resetDefaults() {
     _cfg.balanceTarget = "1144";
     _cfg.balanceMessage = "SALDO";
 
+    _cfg.defaultContact = "";
+    _cfg.balanceCheckIntervalHours = 0;
+    _cfg.lowBalanceSmsEnabled = false;
+    _cfg.lowBalanceThreshold = 2.00;
+    _cfg.lowBatterySmsEnabled = false;
+    _cfg.lowBatteryThresholdPct = 20;
+    _cfg.powerLossSmsEnabled = false;
+    _cfg.smsForwardEnabled = false;
+
     _cfg.webhookEnabled = false;
     _cfg.webhookUrl = "";
     _cfg.webhookSecret = "";
@@ -111,6 +120,15 @@ void ConfigManager::toJson(JsonDocument& doc, bool maskSecrets) const {
     doc["balance_method"] = _cfg.balanceMethod;
     doc["balance_target"] = _cfg.balanceTarget;
     doc["balance_message"] = _cfg.balanceMessage;
+
+    doc["default_contact"] = _cfg.defaultContact;
+    doc["balance_check_interval_hours"] = _cfg.balanceCheckIntervalHours;
+    doc["low_balance_sms_enabled"] = _cfg.lowBalanceSmsEnabled;
+    doc["low_balance_threshold"] = serialized(String(_cfg.lowBalanceThreshold, 2));
+    doc["low_battery_sms_enabled"] = _cfg.lowBatterySmsEnabled;
+    doc["low_battery_threshold_pct"] = _cfg.lowBatteryThresholdPct;
+    doc["power_loss_sms_enabled"] = _cfg.powerLossSmsEnabled;
+    doc["sms_forward_enabled"] = _cfg.smsForwardEnabled;
 
     doc["webhook_enabled"] = _cfg.webhookEnabled;
     doc["webhook_url"] = _cfg.webhookUrl;
@@ -194,6 +212,36 @@ bool ConfigManager::updateFromJson(JsonVariantConst obj, bool& wifiChanged, bool
     }
     if (obj["balance_message"].is<const char*>()) {
         _cfg.balanceMessage = obj["balance_message"].as<String>();
+    }
+
+    if (obj["default_contact"].is<const char*>()) {
+        String c = obj["default_contact"].as<String>();
+        c.trim();
+        _cfg.defaultContact = c;
+    }
+    if (obj["balance_check_interval_hours"].is<int>()) {
+        int h = obj["balance_check_interval_hours"].as<int>();
+        _cfg.balanceCheckIntervalHours = static_cast<uint16_t>(constrain(h, 0, 8760));
+    }
+    if (obj["low_balance_sms_enabled"].is<bool>()) {
+        _cfg.lowBalanceSmsEnabled = obj["low_balance_sms_enabled"].as<bool>();
+    }
+    if (obj["low_balance_threshold"].is<double>() || obj["low_balance_threshold"].is<int>()) {
+        double v = obj["low_balance_threshold"].as<double>();
+        if (v >= 0.0 && v <= 10000.0) _cfg.lowBalanceThreshold = v;
+    }
+    if (obj["low_battery_sms_enabled"].is<bool>()) {
+        _cfg.lowBatterySmsEnabled = obj["low_battery_sms_enabled"].as<bool>();
+    }
+    if (obj["low_battery_threshold_pct"].is<int>()) {
+        int p = obj["low_battery_threshold_pct"].as<int>();
+        _cfg.lowBatteryThresholdPct = static_cast<uint8_t>(constrain(p, 5, 50));
+    }
+    if (obj["power_loss_sms_enabled"].is<bool>()) {
+        _cfg.powerLossSmsEnabled = obj["power_loss_sms_enabled"].as<bool>();
+    }
+    if (obj["sms_forward_enabled"].is<bool>()) {
+        _cfg.smsForwardEnabled = obj["sms_forward_enabled"].as<bool>();
     }
 
     if (obj["webhook_enabled"].is<bool>()) _cfg.webhookEnabled = obj["webhook_enabled"].as<bool>();
