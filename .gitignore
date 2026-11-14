@@ -1,0 +1,33 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Secrets & local overrides (NEVER commit secrets!)
+include/secrets.h
+secrets.h
+*.local.h
+config.local.json
+
+# Build artifacts
+*.bin
+*.elf
+*.map
+*.hex
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node / Python scratch
+node_modules/
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,61 @@
+# Example Home Assistant configuration.yaml snippets for A7670E-Gateway
+#
+# NOTE: If you enable MQTT + Home Assistant Auto-Discovery in the gateway
+# Web UI (Settings -> MQTT), sensors, call state, battery, signal strength,
+# 4G proxy switch, and buttons appear AUTOMATICALLY without any YAML!
+#
+# Use the REST snippets below for sending SMS / making alert calls from
+# automations (or if you prefer REST over MQTT).
+
+rest_command:
+  a7670e_send_sms:
+    url: "http://esp32-cellbridge.local/api/sms/send"
+    method: POST
+    headers:
+      X-API-Key: !secret a7670e_api_key
+      Content-Type: "application/json"
+    payload: '{"to": "{{ to }}", "message": "{{ message }}"}'
+
+  a7670e_alert_call:
+    url: "http://esp32-cellbridge.local/api/call/dial"
+    method: POST
+    headers:
+      X-API-Key: !secret a7670e_api_key
+      Content-Type: "application/json"
+    payload: '{"to": "{{ to }}", "timeout_sec": {{ timeout_sec | default(15) }}}'
+
+  a7670e_hangup_call:
+    url: "http://esp32-cellbridge.local/api/call/hangup"
+    method: POST
+    headers:
+      X-API-Key: !secret a7670e_api_key
+
+# Optional: REST Notify platform
+notify:
+  - name: sms_gateway
+    platform: rest
+    resource: "http://esp32-cellbridge.local/api/sms/send"
+    method: POST_JSON
+    headers:
+      X-API-Key: !secret a7670e_api_key
+    message_param_name: message
+    target_param_name: to
+
+# Example Automation: Forward incoming SMS webhook to HA mobile app notification
+# In Gateway Settings -> Webhook URL:
+#   http://<HOME_ASSISTANT_IP>:8123/api/webhook/a7670e_incoming_sms
+#
+# automation:
+#   - alias: "Notify on Incoming SMS"
+#     trigger:
+#       - platform: webhook
+#         webhook_id: a7670e_incoming_sms
+#         local_only: true
+#     condition:
+#       - condition: template
+#         value_template: "{{ trigger.json.event == 'sms.received' }}"
+#     action:
+#       - service: notify.mobile_app_phone
+#         data:
+#           title: "SMS from {{ trigger.json.data.from }}"
+#           message: "{{ trigger.json.data.message }}"
