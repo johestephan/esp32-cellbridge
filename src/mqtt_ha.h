@@ -36,4 +36,5 @@ private:
     uint32_t _lastConnectAttemptMs = 0;
     uint32_t _lastStatusPubMs = 0;
     bool _discoveryPublished = false;
+    String _smsTarget;
 };

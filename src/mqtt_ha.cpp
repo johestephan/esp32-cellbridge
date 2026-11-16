@@ -2,6 +2,7 @@
 #include "board_pins.h"
 #include "config.h"
 #include "modem_manager.h"
+#include "mqtt_sms_parser.h"
 #include "proxy_server.h"
 
 #include <ArduinoJson.h>
@@ -56,6 +57,8 @@ void MqttHaClient::loop() {
             Serial.println("[MQTT] Connected to broker");
             _mqtt.publish(availTopic.c_str(), "online", true);
             _mqtt.subscribe((c.mqttPrefix + "/sms/send").c_str());
+            _mqtt.subscribe((c.mqttPrefix + "/sms/notify").c_str());
+            _mqtt.subscribe((c.mqttPrefix + "/sms/target/set").c_str());
             _mqtt.subscribe((c.mqttPrefix + "/call/dial").c_str());
             _mqtt.subscribe((c.mqttPrefix + "/call/hangup").c_str());
             _mqtt.subscribe((c.mqttPrefix + "/call/answer").c_str());
@@ -64,10 +67,14 @@ void MqttHaClient::loop() {
             _mqtt.subscribe((c.mqttPrefix + "/balance/check").c_str());
             _mqtt.subscribe((c.mqttPrefix + "/modem/reboot").c_str());
 
+            if (_smsTarget.length() == 0 && c.defaultContact.length() > 0) {
+                _smsTarget = c.defaultContact;
+            }
             if (c.haDiscovery && !_discoveryPublished) {
                 publishDiscovery();
                 _discoveryPublished = true;
             }
+            _mqtt.publish((c.mqttPrefix + "/sms/target/state").c_str(), _smsTarget.c_str(), true);
             publishStatus();
         }
         return;
@@ -93,14 +100,31 @@ void MqttHaClient::handleMessage(char* topic, byte* payload, unsigned int length
     }
     body.trim();
 
-    if (t == c.mqttPrefix + "/sms/send") {
+    if (t == c.mqttPrefix + "/sms/send" || t == c.mqttPrefix + "/sms/notify") {
+        String fallback = _smsTarget.length() > 0 ? _smsTarget : c.defaultContact;
+        String to;
+        String msg;
         JsonDocument doc;
-        if (deserializeJson(doc, body) == DeserializationError::Ok) {
-            String to = doc["to"] | "";
-            String msg = doc["message"] | (doc["text"] | "");
+        if (deserializeJson(doc, body) == DeserializationError::Ok && doc.is<JsonObject>()) {
+            to = doc["to"] | (doc["number"] | (doc["target"] | ""));
+            to.trim();
+            if (to.length() == 0) to = fallback;
+            msg = doc["message"] | (doc["text"] | (doc["msg"] | ""));
+        } else {
+            MqttSmsCommand parsed = parseMqttPlainSmsPayload(body.c_str(), fallback.c_str());
+            if (parsed.valid) {
+                to = parsed.to.c_str();
+                msg = parsed.message.c_str();
+            }
+        }
+        if (to.length() > 0 && msg.length() > 0) {
             String err;
             _modem->sendSms(to, msg, err);
         }
+    } else if (t == c.mqttPrefix + "/sms/target/set") {
+        _smsTarget = body;
+        _smsTarget.trim();
+        _mqtt.publish((c.mqttPrefix + "/sms/target/state").c_str(), _smsTarget.c_str(), true);
     } else if (t == c.mqttPrefix + "/call/dial") {
         JsonDocument doc;
         String to = body;
@@ -321,5 +345,23 @@ void MqttHaClient::publishDiscovery() {
         d["ic"] = "mdi:cash-check";
         String out; serializeJson(d, out);
         publishDiscoveryEntity("button", "check_balance_btn", out);
+    }
+    {
+        auto d = makeDoc("SMS Recipient", "sms_target");
+        d["cmd_t"] = p + "/sms/target/set";
+        d["stat_t"] = p + "/sms/target/state";
+        d["min"] = 0;
+        d["max"] = 32;
+        d["mode"] = "text";
+        d["ic"] = "mdi:account-phone";
+        String out; serializeJson(d, out);
+        publishDiscoveryEntity("text", "sms_target", out);
+    }
+    {
+        auto d = makeDoc("Send SMS", "sms_notify");
+        d["cmd_t"] = p + "/sms/notify";
+        d["ic"] = "mdi:message-arrow-right";
+        String out; serializeJson(d, out);
+        publishDiscoveryEntity("notify", "sms_notify", out);
     }
 }
